@@ -73,7 +73,7 @@ try:
     for k in keys:
         arr = arr[k]
     for item in arr:
-        if item.get('id') == '$id_value':
+        if item.get('id') == int('$id_value'):
             print(json.dumps(item))
             sys.exit(0)
     sys.exit(1)
