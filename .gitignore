@@ -1,0 +1,22 @@
+# OMC (oh-my-claudecode)
+.omc/
+
+# Project-specific
+.improver/proposals/
+.improver/results/
+.improver/logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Temp
+/tmp/
+*.log

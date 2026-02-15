@@ -1,0 +1,20 @@
+{
+  "project": {
+    "name": "",
+    "type": "",
+    "path": "",
+    "branch": "main"
+  },
+  "analyze": {
+    "agents": [],
+    "maxItems": 5,
+    "categories": ["UI·UX", "기능", "성능", "테스트", "아키텍처"]
+  },
+  "approve": {
+    "workflow": ["plan", "test", "implement", "review", "build", "commit", "pr"],
+    "prBase": "main"
+  },
+  "notify": {
+    "channel": "terminal"
+  }
+}

@@ -1,0 +1,354 @@
+#!/bin/bash
+# improve — 프로젝트 개선 자동화 CLI
+# Usage: improve <command> [options]
+
+set -euo pipefail
+
+# IMPROVER_HOME 설정
+export IMPROVER_HOME
+IMPROVER_HOME="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
+
+# 라이브러리 로드
+source "$IMPROVER_HOME/lib/core.sh"
+source "$IMPROVER_HOME/lib/config.sh"
+
+VERSION="0.1.0"
+
+# ── 사용법 ──
+usage() {
+  cat <<EOF
+improve v$VERSION — 프로젝트 개선 자동화
+
+Usage: improve <command> [options]
+
+Commands:
+  init [--type TYPE] [--path PATH]   프로젝트 초기화 (.improver/ 생성)
+  analyze [--notify CHANNEL]         분석 실행 → 개선 제안 생성
+  list                               최신 제안 목록 표시
+  approve <ids> [--notify CHANNEL]   승인 항목 구현 시작
+  status                             진행 상태 표시
+  help                               이 도움말 표시
+
+Options:
+  --type TYPE      프로젝트 타입 (ios, web, generic). 생략시 자동 감지
+  --path PATH      프로젝트 경로 (기본: 현재 디렉토리)
+  --notify CHANNEL 알림 채널 (terminal, slack, discord)
+  --headless       비대화형 모드 (claude -p)
+
+Environment:
+  IMPROVE_HEADLESS=1  비대화형 모드 강제
+  TERMINAL_APP        터미널 앱 (기본: Ghostty)
+  DEBUG=1             디버그 로깅 활성화
+EOF
+}
+
+# ── init 커맨드 ──
+cmd_init() {
+  local project_type=""
+  local project_path="."
+  local project_name=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --type) project_type="$2"; shift 2 ;;
+      --path) project_path="$2"; shift 2 ;;
+      --name) project_name="$2"; shift 2 ;;
+      *) log_error "Unknown option: $1"; return 1 ;;
+    esac
+  done
+
+  project_path="$(realpath "$project_path")"
+
+  if [[ ! -d "$project_path" ]]; then
+    log_error "디렉토리가 존재하지 않습니다: $project_path"
+    return 1
+  fi
+
+  # 타입 자동 감지
+  if [[ -z "$project_type" ]]; then
+    project_type=$(config_detect_type "$project_path")
+    log_info "프로젝트 타입 자동 감지: $project_type"
+  fi
+
+  # 프로젝트 이름
+  if [[ -z "$project_name" ]]; then
+    project_name="$(basename "$project_path")"
+  fi
+
+  # .improver 디렉토리 생성
+  local improver_dir="$project_path/.improver"
+  ensure_dir "$improver_dir"
+  ensure_dir "$improver_dir/proposals"
+  ensure_dir "$improver_dir/results"
+  ensure_dir "$improver_dir/logs"
+
+  # config.json 생성
+  local config_file="$improver_dir/config.json"
+  if [[ -f "$config_file" ]]; then
+    log_warn "설정 파일이 이미 존재합니다: $config_file"
+    log_warn "덮어쓰려면 삭제 후 다시 실행하세요."
+    return 0
+  fi
+
+  # 기본 브랜치 감지
+  local default_branch="main"
+  if [[ -d "$project_path/.git" ]]; then
+    default_branch=$(cd "$project_path" && git symbolic-ref --short HEAD 2>/dev/null || echo "main")
+  fi
+
+  # 타입별 기본 설정
+  local type_config=""
+  case "$project_type" in
+    ios)
+      local scheme_name="$project_name"
+      local xcodeproj
+      xcodeproj=$(find "$project_path" -maxdepth 2 -name "*.xcodeproj" -print -quit 2>/dev/null || echo "")
+      if [[ -n "$xcodeproj" ]]; then
+        scheme_name="$(basename "$xcodeproj" .xcodeproj)"
+      fi
+      type_config="$(cat <<IOSEOF
+  "ios": {
+    "scheme": "$scheme_name",
+    "bundleId": "",
+    "simulator": "iPhone 17 Pro",
+    "screenshotMode": false,
+    "deployCommand": ""
+  },
+  "analyze": {
+    "agents": ["ios-architect", "swift-code-reviewer", "ios-planner"],
+    "maxItems": 5,
+    "categories": ["UI·UX", "기능", "성능", "테스트", "아키텍처"]
+  },
+IOSEOF
+)"
+      ;;
+    web)
+      type_config="$(cat <<WEBEOF
+  "web": {
+    "buildCommand": "npm run build",
+    "deployCommand": "",
+    "framework": ""
+  },
+  "analyze": {
+    "agents": [],
+    "maxItems": 5,
+    "categories": ["UI·UX", "기능", "성능", "테스트", "아키텍처"]
+  },
+WEBEOF
+)"
+      ;;
+    *)
+      type_config="$(cat <<GENEOF
+  "generic": {
+    "buildCommand": "",
+    "deployCommand": ""
+  },
+  "analyze": {
+    "agents": [],
+    "maxItems": 5,
+    "categories": ["기능", "성능", "테스트", "아키텍처"]
+  },
+GENEOF
+)"
+      ;;
+  esac
+
+  cat > "$config_file" <<EOF
+{
+  "project": {
+    "name": "$project_name",
+    "type": "$project_type",
+    "path": "$project_path",
+    "branch": "$default_branch"
+  },
+$type_config
+  "approve": {
+    "workflow": ["plan", "test", "implement", "review", "build", "commit", "pr"],
+    "prBase": "$default_branch"
+  },
+  "notify": {
+    "channel": "terminal"
+  }
+}
+EOF
+
+  log_info "초기화 완료: $config_file"
+  log_info "프로젝트: $project_name ($project_type)"
+  log_info "다음 단계: improve analyze"
+}
+
+# ── list 커맨드 ──
+cmd_list() {
+  local proposals_dir=".improver/proposals"
+
+  if [[ ! -d "$proposals_dir" ]]; then
+    log_error ".improver/proposals 디렉토리가 없습니다. 'improve init' 먼저 실행하세요."
+    return 1
+  fi
+
+  local latest
+  latest=$(ls -t "$proposals_dir"/*.json 2>/dev/null | head -1)
+
+  if [[ -z "$latest" ]]; then
+    log_warn "제안서가 없습니다. 'improve analyze' 먼저 실행하세요."
+    return 0
+  fi
+
+  log_info "최신 제안서: $(basename "$latest")"
+  echo ""
+
+  python3 -c "
+import json, sys
+with open('$latest') as f:
+    data = json.load(f)
+print(f\"날짜: {data.get('date', 'N/A')}\")
+print(f\"항목 수: {len(data.get('items', []))}\")
+print('─' * 60)
+for item in data.get('items', []):
+    diff = item.get('difficulty', '?')
+    diff_color = {'상': '\033[31m', '중': '\033[33m', '하': '\033[32m'}.get(diff, '')
+    print(f\"\n  \033[1m#{item['id']}. [{item.get('category', '?')}] {item.get('title', '?')}\033[0m\")
+    print(f\"     {item.get('description', '')}\")
+    print(f\"     예상효과: {item.get('expectedEffect', '')}\")
+    print(f\"     난이도: {diff_color}{diff}\033[0m | agent: {item.get('agent', '?')} | skill: {item.get('skill', '?')}\")
+print()
+print('승인: improve approve 1,3  (번호를 쉼표로 구분)')
+"
+}
+
+# ── status 커맨드 ──
+cmd_status() {
+  local improver_dir=".improver"
+
+  if [[ ! -d "$improver_dir" ]]; then
+    log_error ".improver 디렉토리가 없습니다. 'improve init' 먼저 실행하세요."
+    return 1
+  fi
+
+  echo ""
+  echo "  improve 상태"
+  echo "  ─────────────"
+
+  # 설정 확인
+  if [[ -f "$improver_dir/config.json" ]]; then
+    local name type
+    name=$(json_get "$improver_dir/config.json" "project.name" 2>/dev/null || echo "?")
+    type=$(json_get "$improver_dir/config.json" "project.type" 2>/dev/null || echo "?")
+    echo "  프로젝트: $name ($type)"
+  fi
+
+  # 제안서 수
+  local proposal_count=0
+  if compgen -G "$improver_dir/proposals/*.json" >/dev/null 2>&1; then
+    proposal_count=$(ls "$improver_dir/proposals/"*.json 2>/dev/null | wc -l | tr -d ' ')
+  fi
+  echo "  제안서: ${proposal_count}개"
+
+  # 최신 제안서
+  if [[ "$proposal_count" -gt 0 ]]; then
+    local latest
+    latest=$(ls -t "$improver_dir/proposals/"*.json 2>/dev/null | head -1)
+    if [[ -n "$latest" ]]; then
+      local item_count
+      item_count=$(python3 -c "import json; print(len(json.load(open('$latest')).get('items',[])))" 2>/dev/null || echo "?")
+      echo "  최신: $(basename "$latest") ($item_count개 항목)"
+    fi
+  fi
+
+  # 결과 수
+  local result_count=0
+  if compgen -G "$improver_dir/results/*.json" >/dev/null 2>&1; then
+    result_count=$(ls "$improver_dir/results/"*.json 2>/dev/null | wc -l | tr -d ' ')
+  fi
+  echo "  구현 결과: ${result_count}개"
+
+  # Git 브랜치 (improvement/ 접두사)
+  if command -v git &>/dev/null && [[ -d .git ]]; then
+    local branches
+    branches=$(git branch --list "improvement/*" 2>/dev/null | wc -l | tr -d ' ')
+    echo "  개선 브랜치: ${branches}개"
+  fi
+
+  echo ""
+}
+
+# ── 노티파이어 로드 ──
+load_notifier() {
+  local channel="${1:-terminal}"
+  local notifier_file="$IMPROVER_HOME/notifiers/${channel}.sh"
+
+  if [[ ! -f "$notifier_file" ]]; then
+    log_warn "노티파이어 없음: $channel, terminal로 폴백"
+    notifier_file="$IMPROVER_HOME/notifiers/terminal.sh"
+  fi
+
+  source "$notifier_file"
+}
+
+# ── 메인 디스패처 ──
+main() {
+  if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+  fi
+
+  local command="$1"
+  shift
+
+  # 글로벌 옵션 파싱
+  local notify_channel=""
+  local remaining_args=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --notify) notify_channel="$2"; shift 2 ;;
+      --headless) export IMPROVE_HEADLESS=1; shift ;;
+      --help|-h) usage; exit 0 ;;
+      --version|-v) echo "improve v$VERSION"; exit 0 ;;
+      *) remaining_args+=("$1"); shift ;;
+    esac
+  done
+
+  # 노티파이어 로드
+  if [[ -n "$notify_channel" ]]; then
+    load_notifier "$notify_channel"
+  else
+    load_notifier "terminal"
+  fi
+
+  case "$command" in
+    init)
+      cmd_init "${remaining_args[@]+"${remaining_args[@]}"}"
+      ;;
+    analyze)
+      source "$IMPROVER_HOME/lib/analyze.sh"
+      run_analyze
+      ;;
+    list)
+      cmd_list
+      ;;
+    approve)
+      if [[ ${#remaining_args[@]} -eq 0 ]]; then
+        log_error "승인할 항목 번호를 지정하세요. 예: improve approve 1,3"
+        exit 1
+      fi
+      source "$IMPROVER_HOME/lib/approve.sh"
+      # 쉼표로 구분된 ID를 공백으로 변환
+      local ids="${remaining_args[0]//,/ }"
+      run_approve $ids
+      ;;
+    status)
+      cmd_status
+      ;;
+    help|--help|-h)
+      usage
+      ;;
+    *)
+      log_error "Unknown command: $command"
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
