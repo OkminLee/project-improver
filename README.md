@@ -1,13 +1,29 @@
 # project-improver
 
-프로젝트 분석 → 개선 제안 → 승인 → 자동 구현까지의 워크플로우를 자동화하는 CLI 도구.
+프로젝트 분석 → 개선 제안 → 승인 → 자동 구현까지의 워크플로우를 자동화하는 도구.
 
-Claude Code를 활용해 프로젝트를 분석하고, 승인된 개선 항목을 자동으로 구현합니다.
+**두 가지 사용 방식:**
+- **Claude Code Plugin** — Claude Code 세션 안에서 `/improve:init`, `/improve:analyze`, `/improve:approve` 스킬로 직접 실행
+- **Bash CLI** — CI/cron 등 외부 자동화용 (`improve` 명령)
 
 ## 설치
 
+### Claude Code Plugin (권장)
+
 ```bash
-git clone <repo-url> ~/Work/project-improver
+# GitHub에서 플러그인 설치
+claude plugin install OkminLee/project-improver
+
+# 또는 로컬 경로에서 설치
+claude plugin install ~/Work/project-improver
+```
+
+설치 후 Claude Code 세션에서 `/improve:init`, `/improve:analyze`, `/improve:approve` 스킬을 사용할 수 있습니다.
+
+### Bash CLI
+
+```bash
+git clone https://github.com/OkminLee/project-improver.git ~/Work/project-improver
 
 # PATH에 추가 (선택)
 echo 'export PATH="$HOME/Work/project-improver/bin:$PATH"' >> ~/.zshrc
@@ -29,12 +45,27 @@ iOS 프로젝트 추가 요구:
 
 ## 빠른 시작
 
+### Claude Code Plugin
+
+```
+# 1. 프로젝트 초기화
+/improve:init --path ~/Work/my-project
+
+# 2. 분석 실행
+/improve:analyze
+
+# 3. 승인 및 자동 구현
+/improve:approve 1,3
+```
+
+### Bash CLI
+
 ```bash
 # 1. 프로젝트 초기화
 cd ~/Work/my-project
 improve init
 
-# 2. 분석 실행 (Claude Code가 프로젝트를 분석하고 개선안 생성)
+# 2. 분석 실행
 improve analyze
 
 # 3. 제안 목록 확인
@@ -228,13 +259,24 @@ improve analyze --notify slack
 
 ```
 project-improver/
-├── bin/improve              # CLI 엔트리포인트
+├── .claude-plugin/
+│   └── plugin.json          # Claude Code 플러그인 매니페스트
+├── skills/
+│   ├── init/SKILL.md        # /improve:init (Claude Code 플러그인)
+│   ├── analyze/SKILL.md     # /improve:analyze (Claude Code 플러그인)
+│   ├── approve/SKILL.md     # /improve:approve (Claude Code 플러그인)
+│   └── openclaw/            # OpenClaw 네이티브 스킬
+│       ├── improve-analyze/SKILL.md
+│       └── improve-approve/SKILL.md
+├── agents/
+│   └── improver-analyzer.md # 분석 전문 에이전트 (read-only, sonnet)
+├── bin/improve              # Bash CLI 엔트리포인트
 ├── lib/
 │   ├── core.sh              # 공용 함수 (로깅, JSON, 템플릿)
 │   ├── config.sh            # 설정 로드/검증
 │   ├── analyze.sh           # 분석 엔진
 │   ├── approve.sh           # 구현 엔진
-│   └── claude-runner.sh     # Claude Code 실행기
+│   └── claude-runner.sh     # Claude Code 실행기 (CLI용)
 ├── plugins/
 │   ├── ios/                 # iOS 플러그인
 │   │   ├── plugin.sh
@@ -243,14 +285,61 @@ project-improver/
 │   └── generic/plugin.sh    # Generic 플러그인 (폴백)
 ├── templates/
 │   ├── config.json          # 기본 설정 템플릿
-│   ├── analyze-prompt.md    # 분석 프롬프트
-│   └── approve-prompt.md    # 구현 프롬프트
+│   ├── analyze-prompt.md    # 분석 프롬프트 (CLI용)
+│   └── approve-prompt.md    # 구현 프롬프트 (CLI용)
 ├── notifiers/
 │   ├── terminal.sh          # 터미널 알림
 │   ├── slack.sh             # Slack 알림
 │   └── discord.sh           # Discord 알림
 └── README.md
 ```
+
+## OpenClaw 에이전트 연동
+
+OpenClaw 에이전트가 Slack/Discord 메시지를 받아 자동으로 분석/구현을 트리거할 수 있습니다.
+
+### 설치
+
+`openclaw.json`에 스킬 경로를 추가합니다:
+
+```json
+{
+  "skills": {
+    "load": {
+      "extraDirs": ["~/Work/project-improver/skills/openclaw"]
+    }
+  }
+}
+```
+
+게이트웨이를 재시작하면 `improve-analyze`, `improve-approve` 스킬이 로드됩니다.
+
+### 요구사항
+
+- `improve` 명령이 PATH에 있어야 합니다
+- `claude` (Claude Code CLI) 설치 필요
+- macOS 필수 (Ghostty + tmux로 Claude Code 실행)
+
+### 사용
+
+Slack/Discord에서 OpenClaw 에이전트에게 메시지를 보냅니다:
+
+```
+# 분석 실행
+~/Work/reading 분석해줘
+
+# 승인 및 구현
+1, 3번 승인
+```
+
+에이전트가 Ghostty 터미널을 열어 Claude Code를 실행하고, 완료 시 notifier로 결과를 전송합니다.
+
+### 제공 스킬
+
+| 스킬 | 트리거 | 동작 |
+|------|--------|------|
+| `improve-analyze` | "분석해줘", "analyze" | `improve analyze` 백그라운드 실행 |
+| `improve-approve` | "N번 승인", "approve N" | `improve approve N` 백그라운드 실행 |
 
 ## 기존 reading 스크립트에서 마이그레이션
 
