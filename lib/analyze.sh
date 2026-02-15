@@ -60,9 +60,9 @@ run_analyze() {
     local ui_context=""
     if type plugin_build &>/dev/null; then
         log_info "플러그인 빌드 실행 중..."
-        notify "프로젝트 빌드" "분석 시작"
+        notifier_send "프로젝트 빌드 시작" "$project_name"
 
-        if plugin_build "$project_path"; then
+        if plugin_build "$CONFIG_FILE"; then
             log_info "플러그인 빌드 성공"
         else
             log_warn "플러그인 빌드 실패, UI 분석 건너뜀"
@@ -74,9 +74,9 @@ run_analyze() {
     # UI 분석 (플러그인 함수 호출)
     if type plugin_ui_analysis &>/dev/null; then
         log_info "UI 분석 실행 중..."
-        notify "UI 분석" "화면 탐색 중"
+        notifier_send "UI 분석 중" "$project_name"
 
-        ui_context=$(plugin_ui_analysis "$project_path") || ui_context=""
+        ui_context=$(plugin_ui_analysis "$CONFIG_FILE") || ui_context=""
 
         if [[ -z "$ui_context" ]]; then
             log_warn "UI 분석 결과 없음"
@@ -142,13 +142,13 @@ except:
     # Claude Code 실행
     local done_marker="/tmp/improver-analyze-done-$$"
 
-    notify "Claude Code 분석 시작" "$project_name"
+    notifier_send "Claude Code 분석 시작" "$project_name"
     log_info "Claude Code 실행 중..."
 
     if ! claude_run "$prompt_file" "$project_path" "$done_marker" 600; then
         log_error "Claude Code 실행 실패"
         rm -f "$prompt_file" "$done_marker"
-        notify "분석 실패" "$project_name"
+        notifier_send "분석 실패" "$project_name"
         return 1
     fi
 
@@ -157,7 +157,7 @@ except:
     # 결과 JSON 검증
     if [[ ! -f "$output_path" ]]; then
         log_error "결과 파일이 생성되지 않음: $output_path"
-        notify "분석 실패: 결과 없음" "$project_name"
+        notifier_send "분석 실패: 결과 없음" "$project_name"
         return 1
     fi
 
@@ -166,14 +166,14 @@ except:
 
     if [[ -z "$json_content" ]]; then
         log_error "결과 파일이 비어있음"
-        notify "분석 실패: 빈 결과" "$project_name"
+        notifier_send "분석 실패: 빈 결과" "$project_name"
         return 1
     fi
 
     # JSON 유효성 검증
     if ! python3 -c "import json; json.loads('''$json_content''')" 2>/dev/null; then
         log_error "결과가 유효한 JSON이 아님"
-        notify "분석 실패: 잘못된 JSON" "$project_name"
+        notifier_send "분석 실패: 잘못된 JSON" "$project_name"
         return 1
     fi
 
@@ -188,7 +188,7 @@ print(len(data.get('items', [])))
     log_info "분석 완료: $item_count개 개선 항목 생성"
     log_info "결과 저장: $output_path"
 
-    notify "분석 완료: ${item_count}개 항목" "$project_name"
+    notifier_send "분석 완료: ${item_count}개 항목" "$project_name"
 
     return 0
 }
