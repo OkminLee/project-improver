@@ -11,11 +11,11 @@
 ### Claude Code Plugin (권장)
 
 ```bash
-# GitHub에서 플러그인 설치
-claude plugin install OkminLee/project-improver
+# 1. 마켓플레이스 등록
+claude plugin marketplace add OkminLee/project-improver
 
-# 또는 로컬 경로에서 설치
-claude plugin install ~/Work/project-improver
+# 2. 플러그인 설치
+claude plugin install project-improver
 ```
 
 설치 후 Claude Code 세션에서 `/improve:init`, `/improve:analyze`, `/improve:approve` 스킬을 사용할 수 있습니다.

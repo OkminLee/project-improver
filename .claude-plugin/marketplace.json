@@ -1,0 +1,10 @@
+{
+  "name": "project-improver-marketplace",
+  "description": "project-improver plugin marketplace",
+  "plugins": [
+    {
+      "name": "project-improver",
+      "path": "."
+    }
+  ]
+}
