@@ -1,10 +1,21 @@
 {
-  "name": "project-improver-marketplace",
-  "description": "project-improver plugin marketplace",
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "project-improver",
+  "description": "프로젝트 분석 → 개선 제안 → 자동 구현 워크플로우",
+  "owner": {
+    "name": "okmin"
+  },
   "plugins": [
     {
       "name": "project-improver",
-      "path": "."
+      "description": "프로젝트 분석 → 개선 제안 → 자동 구현 워크플로우",
+      "version": "0.1.0",
+      "author": {
+        "name": "okmin"
+      },
+      "source": "./",
+      "category": "productivity"
     }
-  ]
+  ],
+  "version": "0.1.0"
 }
