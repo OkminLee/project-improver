@@ -3,7 +3,5 @@
   "version": "0.1.0",
   "description": "프로젝트 분석 → 개선 제안 → 자동 구현 워크플로우",
   "author": { "name": "okmin" },
-  "license": "MIT",
-  "skills": "./skills/",
-  "agents": "./agents/"
+  "license": "MIT"
 }
