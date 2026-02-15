@@ -64,11 +64,36 @@ try:
     workflow = cfg.get('approve', {}).get('workflow', [])
     lines = []
     for i, step in enumerate(workflow, 1):
-        lines.append(f'{i}단계 [{step.get(\"phase\", \"단계\")}]: {step.get(\"description\", \"\")}')
+        if isinstance(step, str):
+            lines.append(f'{i}단계 [{step}]')
+        else:
+            lines.append(f'{i}단계 [{step.get(\"phase\", \"단계\")}]: {step.get(\"description\", \"\")}')
     print('\n'.join(lines) if lines else '(워크플로우 설정 없음)')
 except:
     print('(워크플로우 로드 실패)')
 " 2>/dev/null || echo "(워크플로우 로드 실패)")
+
+    # deploy 단계 포함 여부 확인
+    local has_deploy
+    has_deploy=$(python3 -c "
+import json
+with open('$CONFIG_FILE') as f:
+    cfg = json.load(f)
+workflow = cfg.get('approve', {}).get('workflow', [])
+steps = [s if isinstance(s, str) else s.get('phase','') for s in workflow]
+print('yes' if 'deploy' in steps else 'no')
+" 2>/dev/null || echo "no")
+
+    # deploy용 플러그인 로드
+    if [[ "$has_deploy" == "yes" ]]; then
+        local plugin_file="$IMPROVER_HOME/plugins/$project_type/plugin.sh"
+        if [[ ! -f "$plugin_file" ]]; then
+            plugin_file="$IMPROVER_HOME/plugins/generic/plugin.sh"
+        fi
+        if [[ -f "$plugin_file" ]]; then
+            source "$plugin_file" || log_warn "플러그인 로드 실패"
+        fi
+    fi
 
     # 각 항목별 루프
     for item_id in $item_ids; do
@@ -80,7 +105,7 @@ except:
 
         if [[ -z "$item" ]] || [[ "$item" == "null" ]]; then
             log_error "항목 #$item_id를 찾을 수 없음"
-            notify "항목 #$item_id 없음" "$project_name"
+            notifier_send "항목 #$item_id 없음" "$project_name"
             continue
         fi
 
@@ -142,12 +167,12 @@ print(t.strip('-'))
         # 새 브랜치 생성
         if ! git checkout -b "$branch"; then
             log_error "브랜치 생성 실패: $branch"
-            notify "브랜치 생성 실패: #$item_id" "$project_name"
+            notifier_send "브랜치 생성 실패: #$item_id" "$project_name"
             continue
         fi
 
         log_info "브랜치 '$branch' 생성 완료"
-        notify "구현 시작: #$item_id" "$title"
+        notifier_send "구현 시작: #$item_id $title" "$project_name"
 
         # approve-prompt.md 템플릿 렌더링
         local template_file="$IMPROVER_HOME/templates/approve-prompt.md"
@@ -199,6 +224,22 @@ print(t.strip('-'))
             rm -f "$prompt_file" "$done_marker"
         fi
 
+        # deploy 단계 실행
+        if [[ "$has_deploy" == "yes" ]]; then
+            log_info "배포 단계 실행 중..."
+            if type plugin_deploy &>/dev/null; then
+                if plugin_deploy "$CONFIG_FILE"; then
+                    log_info "배포 성공"
+                    notifier_send "배포 완료: #$item_id $title" "$project_name"
+                else
+                    log_warn "배포 실패"
+                    notifier_send "배포 실패: #$item_id $title" "$project_name"
+                fi
+            else
+                log_warn "plugin_deploy 함수 없음, 배포 건너뜀"
+            fi
+        fi
+
         # 결과 수집 및 알림
         if [[ -f "$result_file" ]]; then
             local pr_url build_num tf_status tf_error
@@ -217,16 +258,16 @@ print(t.strip('-'))
             [[ "$tf_status" == "success" ]] && notify_msg="$notify_msg\nTestFlight: 성공"
             [[ "$tf_status" == "failed" ]] && notify_msg="$notify_msg\nTestFlight: 실패 - $tf_error"
 
-            notify "$project_name" "$notify_msg"
+            notifier_send "$notify_msg" "$project_name"
 
             rm -f "$result_file"
         else
             if [[ -f "$done_marker" ]]; then
                 log_info "Claude Code 작업 완료 (결과 상세 없음)"
-                notify "$project_name" "완료: #$item_id (결과 상세 없음)"
+                notifier_send "완료: #$item_id (결과 상세 없음)" "$project_name"
             else
                 log_warn "Claude Code 타임아웃 또는 실패"
-                notify "$project_name" "경고: #$item_id 타임아웃"
+                notifier_send "경고: #$item_id 타임아웃" "$project_name"
             fi
         fi
 
@@ -236,7 +277,7 @@ print(t.strip('-'))
         log_info "--- 항목 #$item_id 처리 완료 ---"
     done
 
-    notify "$project_name" "전체 작업 완료 ($(echo $item_ids | wc -w | tr -d ' ')개 항목)"
+    notifier_send "전체 작업 완료 ($(echo $item_ids | wc -w | tr -d ' ')개 항목)" "$project_name"
     log_info "=== 개선 항목 구현 완료 ==="
 
     return 0
